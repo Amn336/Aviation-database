@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Ops Console</title>
+<style>
+  :root {
+    --bg:#f4f6fa; --card:#ffffff; --ink:#1b2430; --muted:#6b7686; --line:#e2e7ef;
+    --brand:#1f4fd8; --ok:#14804a; --okbg:#e3f6ec; --warn:#a66300; --warnbg:#fff1d6;
+    --bad:#b42318; --badbg:#fde4e1; --info:#245fa8; --infobg:#e2eefb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10151d; --card:#18202b; --ink:#e8edf5; --muted:#93a0b3; --line:#2a3544;
+            --brand:#6d94ff; --ok:#5fd39a; --okbg:#143826; --warn:#f0b35a; --warnbg:#3b2a0e;
+            --bad:#ff8f84; --badbg:#431a16; --info:#8bbcf5; --infobg:#12304f; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 24px; background:var(--card); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:19px; }
+  header span { color:var(--muted); }
+  nav { display:flex; gap:6px; padding:12px 24px 0; flex-wrap:wrap; }
+  nav button { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:8px 16px; border-radius:8px 8px 0 0; cursor:pointer; font:inherit; }
+  nav button.active { background:var(--brand); border-color:var(--brand); color:#fff; }
+  main { padding:0 24px 40px; }
+  section.panel { display:none; background:var(--card); border:1px solid var(--line); border-radius:0 10px 10px 10px; padding:18px; }
+  section.panel.active { display:block; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  h3 { font-size:14px; margin:22px 0 8px; }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; min-width:640px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+  td.wrap { white-space:normal; min-width:180px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:99px; font-size:12px; font-weight:600; }
+  .b-ok { color:var(--ok); background:var(--okbg); } .b-warn { color:var(--warn); background:var(--warnbg); }
+  .b-bad { color:var(--bad); background:var(--badbg); } .b-info { color:var(--info); background:var(--infobg); }
+  .low { color:var(--bad); font-weight:600; } .near { color:var(--warn); font-weight:600; }
+  form.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+  label.check { flex-direction:row; align-items:center; gap:8px; color:var(--ink); font-size:13px; padding-bottom:8px; }
+  input, select, textarea { font:inherit; padding:8px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); }
+  button.primary { background:var(--brand); color:#fff; border:0; padding:9px 16px; border-radius:7px; cursor:pointer; font:inherit; font-weight:600; }
+  button.small { padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); cursor:pointer; font:inherit; font-size:12px; }
+  button.small.go { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .result { margin-top:12px; padding:10px 12px; border-radius:8px; background:var(--infobg); color:var(--info); display:none; }
+  .hint { color:var(--muted); font-size:12px; margin:4px 0 12px; }
+  .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); gap:18px; }
+  #toast { position:fixed; right:18px; bottom:18px; max-width:420px; padding:12px 16px; border-radius:9px; color:#fff; display:none; box-shadow:0 8px 24px rgba(0,0,0,.25); z-index:10; }
+  #toast.ok { background:var(--ok); } #toast.err { background:var(--bad); }
+  .empty { color:var(--muted); padding:10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet Ops Console</h1>
+  <span>Aircraft maintenance &amp; fleet operations &mdash; live on fleet_ops_db</span>
+</header>
+
+<nav id="tabs">
+  <button data-tab="fleet" class="active">Fleet</button>
+  <button data-tab="maint">Maintenance</button>
+  <button data-tab="flights">Flights</button>
+  <button data-tab="logs">Parts &amp; Logs</button>
+</nav>
+
+<main>
+  <!-- FLEET -->
+  <section id="fleet" class="panel active">
+    <h2>Fleet status</h2>
+    <p class="hint">Reads <b>vw_FleetStatus</b>. Hours left use <b>fn_HoursToNextService</b>; amber means under 100 h, red means overdue.</p>
+    <div class="table-wrap" id="fleetTable"></div>
+  </section>
+
+  <!-- MAINTENANCE -->
+  <section id="maint" class="panel">
+    <h2>Schedule maintenance</h2>
+    <p class="hint">Calls <b>sp_ScheduleMaintenance</b>: grounds the aircraft, then reassigns or flags conflicting flights.</p>
+    <form id="schedForm" class="grid">
+      <label>Aircraft <select id="sAircraft" required></select></label>
+      <label>Check type
+        <select id="sType">
+          <option value="A_CHECK">A-check</option><option value="C_CHECK">C-check</option>
+          <option value="AD_INSPECTION">AD inspection</option><option value="UNSCHEDULED">Unscheduled</option>
+        </select></label>
+      <label>Start <input type="datetime-local" id="sStart" required></label>
+      <label>End <input type="datetime-local" id="sEnd" required></label>
+      <label>Airport <select id="sAirport"></select></label>
+      <label>Remarks <input type="text" id="sRemarks" maxlength="200" placeholder="Optional"></label>
+      <button class="primary" type="submit">Schedule</button>
+    </form>
+    <div id="schedResult" class="result"></div>
+
+    <h3>Maintenance events</h3>
+    <div class="table-wrap" id="eventsTable"></div>
+
+    <div id="taskPanel" style="display:none">
+      <h3 id="taskTitle">Tasks</h3>
+      <div class="table-wrap" id="tasksTable"></div>
+      <h3>Add a task to this event</h3>
+      <form id="taskForm" class="grid">
+        <label>Description <input type="text" id="tDesc" maxlength="150" required></label>
+        <label>Part used <select id="tPart"></select></label>
+        <label>Quantity <input type="number" id="tQty" min="0" value="0"></label>
+        <label>Component <select id="tComp"></select></label>
+        <label class="check"><input type="checkbox" id="tReset"> Overhaul (reset component counters)</label>
+        <button class="primary" type="submit">Add task</button>
+      </form>
+      <p class="hint">Use <b>Complete</b> on the event to run <b>sp_CompleteMaintenance</b>: finishes tasks, deducts stock, resets overhauled parts and restores airworthiness in one transaction.</p>
+    </div>
+  </section>
+
+  <!-- FLIGHTS -->
+  <section id="flights" class="panel">
+    <h2>Flights</h2>
+    <p class="hint">Completing a flight adds hours and cycles to the airframe and its parts. If a critical part passes its limit, <b>trg_FlagAOG</b> puts the aircraft on AOG automatically.</p>
+    <div class="table-wrap" id="flightsTable"></div>
+    <h3>Add a flight</h3>
+    <form id="flightForm" class="grid">
+      <label>Flight no <input type="text" id="fNo" maxlength="10" required></label>
+      <label>Aircraft <select id="fAircraft"></select></label>
+      <label>From <select id="fFrom"></select></label>
+      <label>To <select id="fTo"></select></label>
+      <label>Departure <input type="datetime-local" id="fDep" required></label>
+      <label>Arrival <input type="datetime-local" id="fArr" required></label>
+      <button class="primary" type="submit">Add flight</button>
+    </form>
+    <p class="hint">Try adding a flight on a grounded or AOG aircraft: the database rejects it.</p>
+  </section>
+
+  <!-- LOGS -->
+  <section id="logs" class="panel">
+    <div class="cols">
+      <div>
+        <h2>Parts inventory</h2>
+        <div class="table-wrap" id="stockTable"></div>
+      </div>
+      <div>
+        <h2>Flight disruptions</h2>
+        <div class="table-wrap" id="disruptTable"></div>
+      </div>
+    </div>
+    <h3>Aircraft status log</h3>
+    <div class="table-wrap" id="statusTable"></div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = v => v == null ? '' : String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let lookups = null;
+let selectedEvent = null;
+
+async function api(url, method = 'GET', body) {
+  const r = await fetch(url, { method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+let toastTimer;
+function toast(msg, ok = true) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = ok ? 'ok' : 'err';
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = 'none', 5000);
+}
+
+async function act(fn, okMsg) {
+  try {
+    const out = await fn();
+    if (okMsg) toast(typeof okMsg === 'function' ? okMsg(out) : okMsg);
+    await refreshAll();
+    return out;
+  } catch (e) { toast(e.message, false); }
+}
+
+function badge(text) {
+  const t = String(text);
+  const cls = {SERVICEABLE:'b-ok', AIRWORTHY:'b-ok', COMPLETED:'b-ok', DONE:'b-ok', REASSIGNED:'b-ok',
+               GROUNDED:'b-warn', 'IN MAINTENANCE':'b-warn', SCHEDULED:'b-info', DEPARTED:'b-info', IN_PROGRESS:'b-warn', OPEN:'b-warn',
+               AOG:'b-bad', 'NOT AIRWORTHY (AOG)':'b-bad', REASSIGN_REQUIRED:'b-bad', FLAGGED:'b-bad', CANCELLED:'b-bad'}[t] || 'b-info';
+  return `<span class="badge ${cls}">${esc(t.replace(/_/g, ' '))}</span>`;
+}
+
+function table(cols, rows) {
+  if (!rows.length) return '<div class="empty">Nothing to show yet.</div>';
+  const head = cols.map(c => `<th>${esc(c.h)}</th>`).join('');
+  const body = rows.map(r => '<tr>' + cols.map(c => `<td${c.wrap ? ' class="wrap"' : ''}>${c.f ? c.f(r) : esc(r[c.k])}</td>`).join('') + '</tr>').join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+const hoursCell = v => {
+  if (v == null) return '–';
+  const cls = v < 0 ? 'low' : v < 100 ? 'near' : '';
+  return `<span class="${cls}">${v.toFixed(1)}</span>`;
+};
+
+function fillSelect(sel, items, valueKey, labelFn, keepBlank) {
+  const cur = sel.value;
+  sel.innerHTML = (keepBlank ? `<option value="">${esc(keepBlank)}</option>` : '') +
+    items.map(i => `<option value="${esc(i[valueKey])}">${esc(labelFn(i))}</option>`).join('');
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
+async function loadLookups() {
+  lookups = await api('/api/lookups');
+  const acLabel = a => `${a.registration} (${a.status})`;
+  fillSelect($('#sAircraft'), lookups.aircraft, 'aircraft_id', acLabel);
+  fillSelect($('#fAircraft'), lookups.aircraft, 'aircraft_id', acLabel);
+  const apLabel = a => `${a.airport_code} - ${a.city}`;
+  fillSelect($('#sAirport'), lookups.airports, 'airport_code', apLabel);
+  fillSelect($('#fFrom'), lookups.airports, 'airport_code', apLabel);
+  fillSelect($('#fTo'), lookups.airports, 'airport_code', apLabel);
+  fillSelect($('#tPart'), lookups.parts, 'part_id', p => `${p.part_number} - ${p.description}`, 'No part');
+  fillSelect($('#tComp'), lookups.components, 'component_id', c => `${c.registration} ${c.position_code}`, 'No component');
+}
+
+async function loadFleet() {
+  const rows = await api('/api/fleet');
+  $('#fleetTable').innerHTML = table([
+    {h:'Registration', f:r => `<b>${esc(r.registration)}</b>`},
+    {h:'Operator', k:'operator'}, {h:'Type', k:'aircraft_type'},
+    {h:'Status', f:r => badge(r.status)},
+    {h:'Airworthiness', f:r => badge(r.airworthiness)},
+    {h:'Location', f:r => esc(`${r.location} (${r.location_city})`)},
+    {h:'Flight hrs', f:r => r.total_flight_hours.toFixed(1)},
+    {h:'Cycles', k:'total_cycles'},
+    {h:'To A-check (h)', f:r => hoursCell(r.hours_to_a_check)},
+    {h:'To C-check (h)', f:r => hoursCell(r.hours_to_c_check)},
+    {h:'Engine left (h)', f:r => hoursCell(r.engine_hours_remaining)},
+    {h:'Next maintenance', f:r => esc(r.next_maintenance || '–')},
+  ], rows);
+}
+
+async function loadEvents() {
+  const rows = await api('/api/events');
+  $('#eventsTable').innerHTML = table([
+    {h:'#', k:'event_id'}, {h:'Aircraft', f:r => `<b>${esc(r.registration)}</b>`},
+    {h:'Type', f:r => esc(r.check_type.replace(/_/g, ' '))}, {h:'Airport', k:'airport_code'},
+    {h:'Start', k:'scheduled_start'}, {h:'End', k:'scheduled_end'},
+    {h:'Status', f:r => badge(r.status)},
+    {h:'Tasks', f:r => `${r.done_tasks} done / ${r.open_tasks} open`},
+    {h:'Remarks', f:r => esc(r.remarks || ''), wrap:true},
+    {h:'', f:r => `<button class="small" onclick="openTasks(${r.event_id})">Tasks</button> ` +
+        (r.status === 'SCHEDULED' || r.status === 'IN_PROGRESS'
+          ? `<button class="small go" onclick="completeEvent(${r.event_id})">Complete</button>` : '')},
+  ], rows);
+  if (selectedEvent) loadTasks();
+}
+
+async function loadTasks() {
+  const rows = await api(`/api/events/${selectedEvent}/tasks`);
+  $('#taskTitle').textContent = `Tasks for event #${selectedEvent}`;
+  $('#tasksTable').innerHTML = table([
+    {h:'Description', k:'description', wrap:true}, {h:'Part', f:r => esc(r.part_number || '–')},
+    {h:'Qty', k:'part_qty_used'}, {h:'Component', f:r => esc(r.position_code || '–')},
+    {h:'Overhaul', f:r => r.resets_component ? 'Yes' : 'No'}, {h:'Status', f:r => badge(r.status)},
+  ], rows);
+}
+
+function openTasks(id) {
+  selectedEvent = id;
+  $('#taskPanel').style.display = 'block';
+  loadTasks().catch(e => toast(e.message, false));
+  $('#taskPanel').scrollIntoView({behavior:'smooth'});
+}
+
+function completeEvent(id) {
+  if (!confirm(`Complete maintenance event #${id}? This consumes parts and may restore the aircraft to service.`)) return;
+  act(() => api(`/api/maintenance/${id}/complete`, 'POST'), `Event #${id} completed. Aircraft airworthiness restored where allowed.`);
+}
+
+async function loadFlights() {
+  const rows = await api('/api/flights');
+  $('#flightsTable').innerHTML = table([
+    {h:'Flight', f:r => `<b>${esc(r.flight_no)}</b>`}, {h:'Aircraft', k:'registration'},
+    {h:'Route', f:r => `${esc(r.origin)} → ${esc(r.destination)}`},
+    {h:'Departure', k:'sched_departure'}, {h:'Arrival', k:'sched_arrival'},
+    {h:'Status', f:r => badge(r.status)},
+    {h:'', f:r => (r.status === 'SCHEDULED' || r.status === 'DEPARTED')
+        ? `<button class="small go" onclick="completeFlight(${r.flight_id})">Complete flight</button>` : ''},
+  ], rows);
+}
+
+function completeFlight(id) {
+  act(() => api(`/api/flights/${id}/complete`, 'POST'), 'Flight completed. Hours and cycles updated; the AOG trigger has checked the aircraft.');
+}
+
+async function loadLogs() {
+  const [stock, logs] = await Promise.all([api('/api/stock'), api('/api/logs')]);
+  $('#stockTable').innerHTML = table([
+    {h:'Part', f:r => `<b>${esc(r.part_number)}</b>`}, {h:'Description', k:'description', wrap:true},
+    {h:'On hand', f:r => `<span class="${r.qty_on_hand <= r.reorder_level ? 'low' : ''}">${r.qty_on_hand}</span>`},
+    {h:'Reorder at', k:'reorder_level'},
+  ], stock);
+  $('#disruptTable').innerHTML = table([
+    {h:'Flight', k:'flight_no'}, {h:'Event', k:'event_id'}, {h:'From', k:'old_aircraft'},
+    {h:'To', f:r => esc(r.new_aircraft || '–')}, {h:'Action', f:r => badge(r.action)}, {h:'When', k:'logged_at'},
+  ], logs.disruptions);
+  $('#statusTable').innerHTML = table([
+    {h:'When', k:'changed_at'}, {h:'Aircraft', k:'registration'},
+    {h:'Change', f:r => `${badge(r.old_status)} → ${badge(r.new_status)}`}, {h:'Reason', k:'reason', wrap:true},
+  ], logs.status);
+}
+
+async function refreshAll() {
+  await loadLookups();
+  await Promise.all([loadFleet(), loadEvents(), loadFlights(), loadLogs()]);
+}
+
+/* ---- forms ---- */
+$('#schedForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const out = await act(() => api('/api/maintenance/schedule', 'POST', {
+    aircraft_id: $('#sAircraft').value, check_type: $('#sType').value,
+    start: $('#sStart').value, end: $('#sEnd').value,
+    airport: $('#sAirport').value, remarks: $('#sRemarks').value,
+  }));
+  if (out) {
+    const box = $('#schedResult');
+    box.style.display = 'block';
+    box.textContent = `Event #${out.event_id} scheduled. Flights reassigned: ${out.reassigned}. Flights flagged for reassignment: ${out.flagged}.`;
+    toast('Maintenance scheduled; aircraft grounded.');
+    openTasks(out.event_id);
+  }
+});
+
+$('#taskForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!selectedEvent) return;
+  const ok = await act(() => api(`/api/maintenance/${selectedEvent}/tasks`, 'POST', {
+    description: $('#tDesc').value, part_id: $('#tPart').value, qty: $('#tQty').value,
+    component_id: $('#tComp').value, resets: $('#tReset').checked,
+  }), 'Task added.');
+  if (ok) { $('#tDesc').value = ''; $('#tQty').value = 0; $('#tReset').checked = false; }
+});
+
+$('#flightForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const ok = await act(() => api('/api/flights', 'POST', {
+    flight_no: $('#fNo').value, aircraft_id: $('#fAircraft').value,
+    origin: $('#fFrom').value, destination: $('#fTo').value,
+    departure: $('#fDep').value, arrival: $('#fArr').value,
+  }), 'Flight added.');
+  if (ok) $('#fNo').value = '';
+});
+
+/* ---- tabs and defaults ---- */
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('button[data-tab]');
+  if (!b) return;
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section.panel').forEach(s => s.classList.toggle('active', s.id === b.dataset.tab));
+});
+
+function localInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+(function defaults() {
+  const t = new Date(); t.setDate(t.getDate() + 1);
+  const start = new Date(t); start.setHours(0, 0, 0, 0);
+  const end = new Date(t); end.setHours(23, 59, 0, 0);
+  $('#sStart').value = localInput(start); $('#sEnd').value = localInput(end);
+  const dep = new Date(t); dep.setHours(14, 0, 0, 0);
+  const arr = new Date(t); arr.setHours(16, 0, 0, 0);
+  $('#fDep').value = localInput(dep); $('#fArr').value = localInput(arr);
+})();
+
+refreshAll().catch(e => toast('Cannot reach the database: ' + e.message, false));
+</script>
+</body>
+</html>
